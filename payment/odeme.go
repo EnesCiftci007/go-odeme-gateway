@@ -34,7 +34,6 @@ func VeritabaniBaglan() (*gorm.DB, error) {
 		return nil, err
 	}
 
-	// Yeni tabloyu da AutoMigrate ile ekliyoruz!
 	err = db.AutoMigrate(&KrediKarti{}, &IslemGecmisi{})
 	if err != nil {
 		return nil, err

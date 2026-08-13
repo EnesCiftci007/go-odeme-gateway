@@ -1,4 +1,3 @@
-# Docker imajına girmesini istemediğimiz dosyalar
 .git
 .gitignore
 *.db
