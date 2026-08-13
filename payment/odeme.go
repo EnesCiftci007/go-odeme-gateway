@@ -22,7 +22,7 @@ type IslemGecmisi struct {
 	ID     uint      `gorm:"primaryKey" json:"id"`
 	KartNo string    `json:"kart_no"`
 	Tutar  float64   `json:"tutar"`
-	Durum  string    `json:"durum"` // "Başarılı" veya "Yetersiz Bakiye" vb.
+	Durum  string    `json:"durum"` 
 	Tarih  time.Time `json:"tarih"`
 }
 
