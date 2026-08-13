@@ -19,7 +19,7 @@
 <body class="py-5">
 
     <div class="container" style="max-width: 900px;">
-        <!-- LOGO / BAŞLIK -->
+        
         <div class="text-center mb-4">
             <h2 class="fw-bold text-indigo-400">🚀 Go Payment Gateway</h2>
             <p class="text-muted small">JWT Güvenlikli & SQL İşlem Loglamalı Microservice</p>
@@ -104,7 +104,6 @@
         </div>
     </div>
 
-    <!-- JAVASCRIPT -->
     <script>
         let jwtToken = "";
 
@@ -183,8 +182,7 @@
 
     async function islemleriGetir() {
     const tbody = document.getElementById('transactionsTable');
-    
-    // Butona basıldığında yükleniyor hissi verelim
+ 
     tbody.innerHTML = `<tr><td colspan="3" class="text-muted">Yükleniyor...</td></tr>`;
 
     try {

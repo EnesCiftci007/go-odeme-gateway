@@ -82,7 +82,6 @@ func odemeHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// 1. ÖZELLİK: İŞLEM GEÇMİŞİ ENDPOINT'İ
 func islemlerHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var islemler []payment.IslemGecmisi
@@ -162,7 +161,7 @@ func main() {
 		panic(fmt.Sprintf("Veritabanına bağlanılamadı: %v", err))
 	}
 
-	// Endpoint'ler
+	
 	http.HandleFunc("/api/v1/login", loginHandler)
 	http.HandleFunc("/api/v1/pay", JWTMiddleware(odemeHandler))
 	http.HandleFunc("/api/v1/transactions", JWTMiddleware(islemlerHandler))

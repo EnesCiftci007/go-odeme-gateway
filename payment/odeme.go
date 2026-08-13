@@ -59,7 +59,6 @@ func OdemeYap(kartNo string, bakiye float64, tutar float64) (float64, error) {
 	}
 
 	if kart.Bakiye < tutar {
-		// Başarısız işlemi logla
 		IslemKaydet(kartNo, tutar, "Yetersiz Bakiye")
 		return kart.Bakiye, errors.New("yetersiz bakiye: işlem gerçekleştirilemedi")
 	}
@@ -67,7 +66,6 @@ func OdemeYap(kartNo string, bakiye float64, tutar float64) (float64, error) {
 	kart.Bakiye -= tutar
 	DB.Save(&kart)
 
-	// Başarılı işlemi logla
 	IslemKaydet(kartNo, tutar, "Başarılı")
 
 	return kart.Bakiye, nil
