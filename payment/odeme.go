@@ -3,108 +3,183 @@ package payment
 import (
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"regexp"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
-
-var DB *gorm.DB
 
 type KrediKarti struct {
 	gorm.Model
-	KartNo string  `gorm:"uniqueIndex" json:"kart_no"`
-	Bakiye float64 `json:"bakiye"`
+	KartNo string `gorm:"uniqueIndex;not null" json:"kart_no"`
+	Bakiye Kurus  `gorm:"column:bakiye_kurus;not null;check:bakiye_kurus >= 0" json:"bakiye"`
 }
 
 type IslemGecmisi struct {
 	ID     uint      `gorm:"primaryKey" json:"id"`
-	KartNo string    `json:"kart_no"`
-	Tutar  float64   `json:"tutar"`
-	Durum  string    `json:"durum"` 
-	Tarih  time.Time `json:"tarih"`
+	KartNo string    `gorm:"index;not null" json:"kart_no"`
+	Tutar  Kurus     `gorm:"column:tutar_kurus;not null" json:"tutar"`
+	Durum  string    `gorm:"not null" json:"durum"`
+	Tarih  time.Time `gorm:"not null" json:"tarih"`
 }
 
-var jwtAnahtar = []byte("gizli_go_anahtari_123!")
+const (
+	DurumBasarili       = "Başarılı"
+	DurumYetersizBakiye = "Yetersiz Bakiye"
+	maksTopluKartSayisi = 1000
+)
 
-func VeritabaniBaglan() (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open("odeme_sistemi.db"), &gorm.Config{})
+var (
+	ErrKartBulunamadi = errors.New("kart bulunamadı")
+	ErrYetersizBakiye = errors.New("yetersiz bakiye: işlem gerçekleştirilemedi")
+	ErrGecersizKartNo = errors.New("geçersiz kart numarası")
+	ErrCokFazlaKart   = fmt.Errorf("tek seferde en fazla %d kart yüklenebilir", maksTopluKartSayisi)
+	kartNoDeseni      = regexp.MustCompile(`^[0-9]{4}([ -]?[0-9]{2,4}){1,4}$`)
+)
+
+// Servis, veritabanı bağlantısını taşır. Global değişken yerine bunu kullanmak
+// testlerde her test için ayrı bir veritabanı açmayı mümkün kılar.
+type Servis struct {
+	DB *gorm.DB
+}
+
+// VeritabaniBaglan, SQLite veritabanını açar ve tabloları oluşturur.
+func VeritabaniBaglan(yol string) (*Servis, error) {
+	// busy_timeout: aynı anda gelen yazma isteklerinde "database is locked" yerine bekler.
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on", yol)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		// "kayıt bulunamadı" normal bir durumdur (örn. hatalı giriş denemesi);
+		// loglanırsa denenen e-posta adresleri loglara sızar.
+		Logger: logger.New(log.New(os.Stderr, "", log.LstdFlags), logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+		}),
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	err = db.AutoMigrate(&KrediKarti{}, &IslemGecmisi{})
+	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, err
 	}
+	// SQLite tek yazıcıyı destekler; tek bağlantı yarış durumlarını ve kilit hatalarını önler.
+	sqlDB.SetMaxOpenConns(1)
 
-	DB = db
-	return db, nil
+	if err := db.AutoMigrate(&KrediKarti{}, &IslemGecmisi{}, &Kullanici{}); err != nil {
+		return nil, err
+	}
+	return &Servis{DB: db}, nil
 }
 
-func OdemeYap(kartNo string, bakiye float64, tutar float64) (float64, error) {
-	var kart KrediKarti
-	result := DB.Where("kart_no = ?", kartNo).First(&kart)
+func KartNoGecerli(kartNo string) bool {
+	return len(kartNo) <= 25 && kartNoDeseni.MatchString(kartNo)
+}
 
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			kart = KrediKarti{KartNo: kartNo, Bakiye: bakiye}
-			DB.Create(&kart)
-			fmt.Printf("🆕 Yeni kart kaydedildi: %s (Bakiye: %.2f)\n", kartNo, bakiye)
-		} else {
-			return 0, result.Error
+func tutarGecerli(t Kurus) bool {
+	return t > 0 && t <= MaxTutar
+}
+
+// OdemeYap, karttan tutarı düşer ve kalan bakiyeyi döndürür.
+// Bakiye her zaman veritabanından okunur; istemci bakiye belirleyemez.
+// Düşme işlemi tek bir koşullu UPDATE ile yapılır, böylece aynı anda gelen
+// iki ödeme kartı eksi bakiyeye düşüremez.
+func (s *Servis) OdemeYap(kartNo string, tutar Kurus) (Kurus, error) {
+	if !KartNoGecerli(kartNo) {
+		return 0, ErrGecersizKartNo
+	}
+	if !tutarGecerli(tutar) {
+		return 0, ErrGecersizTutar
+	}
+
+	var kalan Kurus
+	var sonucHata error
+
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&KrediKarti{}).
+			Where("kart_no = ? AND bakiye_kurus >= ?", kartNo, tutar).
+			Update("bakiye_kurus", gorm.Expr("bakiye_kurus - ?", tutar))
+		if res.Error != nil {
+			return res.Error
 		}
+
+		var kart KrediKarti
+		if err := tx.Where("kart_no = ?", kartNo).First(&kart).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				sonucHata = ErrKartBulunamadi
+				return nil
+			}
+			return err
+		}
+		kalan = kart.Bakiye
+
+		durum := DurumBasarili
+		if res.RowsAffected == 0 {
+			durum = DurumYetersizBakiye
+			sonucHata = ErrYetersizBakiye
+		}
+		return islemKaydet(tx, kartNo, tutar, durum)
+	})
+	if err != nil {
+		return 0, err
 	}
-
-	if kart.Bakiye < tutar {
-		IslemKaydet(kartNo, tutar, "Yetersiz Bakiye")
-		return kart.Bakiye, errors.New("yetersiz bakiye: işlem gerçekleştirilemedi")
-	}
-
-	kart.Bakiye -= tutar
-	DB.Save(&kart)
-
-	IslemKaydet(kartNo, tutar, "Başarılı")
-
-	return kart.Bakiye, nil
+	return kalan, sonucHata
 }
 
-func IslemKaydet(kartNo string, tutar float64, durum string) {
-	islem := IslemGecmisi{
+func islemKaydet(tx *gorm.DB, kartNo string, tutar Kurus, durum string) error {
+	return tx.Create(&IslemGecmisi{
 		KartNo: kartNo,
 		Tutar:  tutar,
 		Durum:  durum,
-		Tarih:  time.Now(),
-	}
-	DB.Create(&islem)
+		Tarih:  time.Now().UTC(),
+	}).Error
 }
 
-func TokenUret(eposta string) (string, error) {
-	claims := jwt.MapClaims{
-		"eposta": eposta,
-		"exp":    time.Now().Add(time.Hour * 24).Unix(),
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtAnahtar)
+// SonIslemler, en son yapılan işlemleri döndürür.
+func (s *Servis) SonIslemler(limit int) ([]IslemGecmisi, error) {
+	islemler := []IslemGecmisi{}
+	err := s.DB.Order("id desc").Limit(limit).Find(&islemler).Error
+	return islemler, err
 }
 
-func TokenDogrula(tokenString string) (jwt.MapClaims, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("beklenmeyen imza yöntemi")
+// TopluKartEkle, kartları tek transaction içinde ekler; zaten var olan kartları atlar.
+// Kartlardan biri geçersizse hiçbiri eklenmez.
+func (s *Servis) TopluKartEkle(kartlar []KrediKarti) (int64, error) {
+	if len(kartlar) > maksTopluKartSayisi {
+		return 0, ErrCokFazlaKart
+	}
+	for i, k := range kartlar {
+		if !KartNoGecerli(k.KartNo) {
+			return 0, fmt.Errorf("%d. kart: %w", i+1, ErrGecersizKartNo)
 		}
-		return jwtAnahtar, nil
+		if k.Bakiye < 0 || k.Bakiye > MaxTutar {
+			return 0, fmt.Errorf("%d. kart: %w", i+1, ErrGecersizTutar)
+		}
+	}
+	if len(kartlar) == 0 {
+		return 0, nil
+	}
+
+	var eklenen int64
+	err := s.DB.Transaction(func(tx *gorm.DB) error {
+		for _, k := range kartlar {
+			kart := KrediKarti{KartNo: k.KartNo, Bakiye: k.Bakiye}
+			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&kart)
+			if res.Error != nil {
+				return res.Error
+			}
+			eklenen += res.RowsAffected
+		}
+		return nil
 	})
-
-	if err != nil || !token.Valid {
-		return nil, errors.New("geçersiz veya süresi dolmuş token")
+	if err != nil {
+		return 0, err
 	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, errors.New("token verisi okunamadı")
-	}
-
-	return claims, nil
+	return eklenen, nil
 }

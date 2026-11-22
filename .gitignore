@@ -1,0 +1,12 @@
+# Veritabanı ve loglar
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Gizli ayarlar
+.env
+
+# Derleme çıktıları
+/main
+*.exe

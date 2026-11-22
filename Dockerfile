@@ -17,10 +17,16 @@ FROM alpine:latest
 
 RUN apk add --no-cache ca-certificates sqlite
 
+RUN adduser -D -H appuser && mkdir -p /app/data && chown appuser /app/data
+
 WORKDIR /app
 
 COPY --from=builder /app/main .
 COPY --from=builder /app/templates ./templates
+
+ENV DB_PATH=/app/data/odeme_sistemi.db
+VOLUME /app/data
+USER appuser
 
 EXPOSE 8080
 
