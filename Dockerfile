@@ -1,34 +1,33 @@
-FROM golang:alpine AS builder
+# --- Derleme ---
+FROM golang:1.26-alpine AS builder
 
+# SQLite sürücüsü CGO gerektirir.
 RUN apk add --no-cache gcc musl-dev
 
-WORKDIR /app
-
+WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-
 COPY . .
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w -extldflags "-static"' -o /out/server ./cmd/server
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o main .
+# --- Çalışma ---
+FROM alpine:3.22
 
-
-FROM alpine:latest
-
-RUN apk add --no-cache ca-certificates sqlite
-
-RUN adduser -D -H appuser && mkdir -p /app/data && chown appuser /app/data
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -H -u 10001 appuser \
+    && mkdir -p /app/data && chown appuser /app/data
 
 WORKDIR /app
+COPY --from=builder /out/server /app/server
 
-COPY --from=builder /app/main .
-COPY --from=builder /app/templates ./templates
-
-ENV DB_PATH=/app/data/odeme_sistemi.db
+ENV DB_PATH=/app/data/odeme_sistemi.db \
+    LOG_FORMAT=json
 VOLUME /app/data
 USER appuser
-
 EXPOSE 8080
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s \
+    CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
 
-CMD ["./main"]
+CMD ["/app/server"]

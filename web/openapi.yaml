@@ -1,0 +1,377 @@
+openapi: 3.1.0
+info:
+  title: Go Ödeme Gateway API
+  version: 2.0.0
+  description: |
+    Kart bakiyesinden ödeme alma, iade ve çift taraflı defter tutan ödeme servisi.
+
+    **Tutarlar** JSON'da TL cinsinden ondalık sayıdır (en fazla 2 basamak, ör. `250.50`)
+    ve sunucuda kuruş olarak tam sayı tutulur. Sayı veya metin (`"250.50"`) olarak gönderilebilir.
+
+    **Hata yanıtları** her zaman `{"basarili": false, "kod": "...", "mesaj": "..."}` biçimindedir;
+    `kod` alanı makine tarafından okunmak içindir.
+
+    **Idempotency:** `POST /payments` ve `POST /payments/{id}/refunds` isteklerine
+    `Idempotency-Key` başlığı eklenirse aynı anahtarla tekrar gönderilen istek yeni bir işlem
+    yapmaz, ilk yanıt `Idempotent-Replayed: true` başlığıyla tekrar döner (24 saat geçerli).
+servers:
+  - url: http://localhost:8080
+security:
+  - bearer: []
+tags:
+  - name: Kimlik
+  - name: Kartlar
+  - name: Ödemeler
+  - name: Yönetim
+  - name: Sistem
+
+paths:
+  /api/v1/auth/login:
+    post:
+      tags: [Kimlik]
+      summary: Giriş yap ve token al
+      description: IP başına dakikada yaklaşık 5 deneme ile sınırlıdır.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eposta, sifre]
+              properties:
+                eposta: { type: string, format: email }
+                sifre: { type: string }
+      responses:
+        "200":
+          description: Giriş başarılı. Token 1 saat geçerlidir.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  basarili: { type: boolean }
+                  token: { type: string }
+                  kullanici: { $ref: "#/components/schemas/Kimlik" }
+        "401": { $ref: "#/components/responses/Hata" }
+        "429": { $ref: "#/components/responses/Hata" }
+
+  /api/v1/me:
+    get:
+      tags: [Kimlik]
+      summary: Oturumdaki kullanıcı
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Kimlik" }
+        "401": { $ref: "#/components/responses/Hata" }
+
+  /api/v1/cards:
+    get:
+      tags: [Kartlar]
+      summary: Kartları listele
+      description: Kullanıcı kendi kartlarını, admin tüm kartları görür. Kart numaraları maskelidir.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kartlar:
+                    type: array
+                    items: { $ref: "#/components/schemas/Kart" }
+
+  /api/v1/cards/batch:
+    post:
+      tags: [Kartlar]
+      summary: Toplu kart yükle (admin)
+      description: |
+        Var olan kart numaraları atlanır. Bir kart geçersizse hiçbiri eklenmez.
+        Başlangıç bakiyesi deftere yükleme olarak yazılır.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1000
+              items:
+                type: object
+                required: [kart_no]
+                properties:
+                  kart_no: { type: string, example: "1111-2222" }
+                  bakiye: { $ref: "#/components/schemas/Tutar" }
+                  sahip_eposta: { type: string, format: email }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  basarili: { type: boolean }
+                  eklenen_sayi: { type: integer }
+                  atlanan_sayi: { type: integer }
+        "400": { $ref: "#/components/responses/Hata" }
+        "403": { $ref: "#/components/responses/Hata" }
+
+  /api/v1/payments:
+    post:
+      tags: [Ödemeler]
+      summary: Ödeme al
+      description: |
+        Bakiye sunucuda tutulur ve istemci tarafından belirlenemez. Kullanıcı yalnızca kendi
+        kartlarını kullanabilir. Yetersiz bakiyede ödeme `reddedildi` durumuyla kaydedilir ve 402 döner.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tutar]
+              description: kart_id veya kart_no alanlarından biri gereklidir.
+              properties:
+                kart_id: { type: integer }
+                kart_no: { type: string }
+                tutar: { $ref: "#/components/schemas/Tutar" }
+                aciklama: { type: string, maxLength: 140 }
+      responses:
+        "201":
+          description: Ödeme başarılı
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OdemeSonucu" }
+        "402":
+          description: Yetersiz bakiye (ödeme reddedildi olarak kaydedildi)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OdemeSonucu" }
+        "400": { $ref: "#/components/responses/Hata" }
+        "404": { $ref: "#/components/responses/Hata" }
+        "409": { $ref: "#/components/responses/Hata" }
+        "422": { $ref: "#/components/responses/Hata" }
+    get:
+      tags: [Ödemeler]
+      summary: Ödemeleri listele (yeniden eskiye)
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: once
+          in: query
+          description: Önceki sayfanın `sonraki_imlec` değeri.
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  odemeler:
+                    type: array
+                    items: { $ref: "#/components/schemas/Odeme" }
+                  sonraki_imlec: { type: string }
+
+  /api/v1/payments/{id}:
+    get:
+      tags: [Ödemeler]
+      summary: Ödeme ayrıntısı
+      parameters:
+        - $ref: "#/components/parameters/OdemeID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Odeme" }
+        "404": { $ref: "#/components/responses/Hata" }
+
+  /api/v1/payments/{id}/refunds:
+    post:
+      tags: [Ödemeler]
+      summary: İade et (tam veya kısmi)
+      description: Tutar verilmezse iade edilebilir tutarın tamamı iade edilir. Birden fazla kısmi iade yapılabilir.
+      parameters:
+        - $ref: "#/components/parameters/OdemeID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tutar: { $ref: "#/components/schemas/Tutar" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OdemeSonucu" }
+        "404": { $ref: "#/components/responses/Hata" }
+        "409": { $ref: "#/components/responses/Hata" }
+
+  /api/v1/users:
+    get:
+      tags: [Yönetim]
+      summary: Kullanıcıları listele (admin)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kullanicilar:
+                    type: array
+                    items: { $ref: "#/components/schemas/Kullanici" }
+    post:
+      tags: [Yönetim]
+      summary: Kullanıcı oluştur (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eposta, sifre, rol]
+              properties:
+                eposta: { type: string, format: email }
+                sifre: { type: string, minLength: 8, maxLength: 72 }
+                rol: { type: string, enum: [admin, kullanici] }
+      responses:
+        "201":
+          description: Oluşturuldu
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Kullanici" }
+        "400": { $ref: "#/components/responses/Hata" }
+        "409": { $ref: "#/components/responses/Hata" }
+
+  /api/v1/admin/reconciliation:
+    get:
+      tags: [Yönetim]
+      summary: Defter mutabakatı (admin)
+      description: Defterin dengeli olduğunu ve her kart bakiyesinin defterle uyuştuğunu kontrol eder.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tutarli: { type: boolean }
+                  defter_toplami: { $ref: "#/components/schemas/Tutar" }
+                  isyeri_bakiyesi: { $ref: "#/components/schemas/Tutar" }
+                  kart_sayisi: { type: integer }
+                  uyusmayan_kartlar: { type: array, items: { type: string } }
+
+  /healthz:
+    get:
+      tags: [Sistem]
+      summary: Canlılık kontrolü
+      security: []
+      responses:
+        "200": { description: Süreç çalışıyor }
+  /readyz:
+    get:
+      tags: [Sistem]
+      summary: Hazırlık kontrolü (veritabanı erişimi)
+      security: []
+      responses:
+        "200": { description: Hazır }
+        "503": { description: Veritabanına ulaşılamıyor }
+  /metrics:
+    get:
+      tags: [Sistem]
+      summary: Prometheus metrikleri
+      security: []
+      responses:
+        "200": { description: Prometheus metin formatı }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Rastgele, istek başına benzersiz bir değer (ör. UUID). En fazla 255 karakter.
+      schema: { type: string, maxLength: 255 }
+    OdemeID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, example: odm_3f2a9c1b7d4e5f6a7b8c9d0e }
+  responses:
+    Hata:
+      description: Hata
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Hata" }
+  schemas:
+    Tutar:
+      type: number
+      multipleOf: 0.01
+      example: 250.5
+    Hata:
+      type: object
+      properties:
+        basarili: { type: boolean, const: false }
+        kod: { type: string, example: yetersiz_bakiye }
+        mesaj: { type: string }
+    Kimlik:
+      type: object
+      properties:
+        id: { type: integer }
+        eposta: { type: string }
+        rol: { type: string, enum: [admin, kullanici] }
+    Kullanici:
+      type: object
+      properties:
+        id: { type: integer }
+        eposta: { type: string }
+        rol: { type: string, enum: [admin, kullanici] }
+        olusturma: { type: string, format: date-time }
+    Kart:
+      type: object
+      properties:
+        id: { type: integer }
+        kart_no: { type: string, example: "•••• 2222" }
+        bakiye: { $ref: "#/components/schemas/Tutar" }
+        sahip_eposta: { type: string }
+        olusturma: { type: string, format: date-time }
+    Odeme:
+      type: object
+      properties:
+        id: { type: string, example: odm_3f2a9c1b7d4e5f6a7b8c9d0e }
+        kart_id: { type: integer }
+        kart_no: { type: string, example: "•••• 2222" }
+        tutar: { $ref: "#/components/schemas/Tutar" }
+        iade_edilen: { $ref: "#/components/schemas/Tutar" }
+        iade_edilebilir: { $ref: "#/components/schemas/Tutar" }
+        durum: { type: string, enum: [basarili, reddedildi, kismi_iade, iade_edildi] }
+        aciklama: { type: string }
+        olusturma: { type: string, format: date-time }
+    OdemeSonucu:
+      type: object
+      properties:
+        basarili: { type: boolean }
+        kod: { type: string }
+        mesaj: { type: string }
+        odeme: { $ref: "#/components/schemas/Odeme" }
+        kalan_bakiye: { $ref: "#/components/schemas/Tutar" }

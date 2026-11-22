@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Go Ödeme Gateway</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Cpath d='M8 12h16v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2z' fill='%23fff'/%3E%3Crect x='8' y='9' width='16' height='5' rx='1' fill='%23c7d2fe'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <!-- Giriş -->
+  <main id="girisEkrani" class="giris" hidden>
+    <form id="girisFormu" class="giris-kart" novalidate>
+      <div class="marka">
+        <span class="marka-logo" aria-hidden="true"></span>
+        <div>
+          <h1>Go Ödeme Gateway</h1>
+          <p class="soluk">Hesabınıza giriş yapın</p>
+        </div>
+      </div>
+      <label class="alan">
+        <span>E-posta</span>
+        <input type="email" name="eposta" autocomplete="username" required autofocus>
+      </label>
+      <label class="alan">
+        <span>Şifre</span>
+        <input type="password" name="sifre" autocomplete="current-password" required>
+      </label>
+      <p class="form-hata" role="alert" hidden></p>
+      <button type="submit" class="btn btn-ana btn-genis">Giriş yap</button>
+    </form>
+  </main>
+
+  <!-- Uygulama -->
+  <div id="uygulama" hidden>
+    <header class="ust">
+      <div class="ust-ic">
+        <div class="marka kucuk">
+          <span class="marka-logo" aria-hidden="true"></span>
+          <strong>Ödeme Gateway</strong>
+        </div>
+        <nav class="sekmeler" aria-label="Bölümler">
+          <button type="button" class="sekme" data-sekme="odemeler" aria-current="page">Ödemeler</button>
+          <button type="button" class="sekme" data-sekme="kartlar">Kartlar</button>
+          <button type="button" class="sekme" data-sekme="yonetim" data-admin hidden>Yönetim</button>
+        </nav>
+        <div class="kullanici">
+          <span id="kullaniciEposta" class="soluk"></span>
+          <span id="kullaniciRol" class="rozet"></span>
+          <button type="button" id="cikisBtn" class="btn btn-hayalet btn-kucuk">Çıkış</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="icerik">
+      <section class="ozet" aria-label="Özet">
+        <div class="ozet-kutu">
+          <span class="ozet-etiket">Toplam bakiye</span>
+          <span id="ozetBakiye" class="ozet-deger">—</span>
+        </div>
+        <div class="ozet-kutu">
+          <span class="ozet-etiket">Kart sayısı</span>
+          <span id="ozetKart" class="ozet-deger">—</span>
+        </div>
+        <div class="ozet-kutu" data-admin hidden>
+          <span class="ozet-etiket">İşyeri bakiyesi</span>
+          <span id="ozetIsyeri" class="ozet-deger">—</span>
+        </div>
+        <div class="ozet-kutu" data-admin hidden>
+          <span class="ozet-etiket">Defter mutabakatı</span>
+          <span id="ozetMutabakat" class="ozet-deger">—</span>
+        </div>
+      </section>
+
+      <!-- Ödemeler -->
+      <section id="bolum-odemeler" class="bolum izgara">
+        <form id="odemeFormu" class="panel" novalidate>
+          <h2>Yeni ödeme</h2>
+          <label class="alan">
+            <span>Kart</span>
+            <select name="kart_id" required></select>
+          </label>
+          <label class="alan">
+            <span>Tutar</span>
+            <div class="tutar-girdi">
+              <input type="text" name="tutar" inputmode="decimal" placeholder="0,00" autocomplete="off" required>
+              <span aria-hidden="true">₺</span>
+            </div>
+          </label>
+          <label class="alan">
+            <span>Açıklama <em class="soluk">(isteğe bağlı)</em></span>
+            <input type="text" name="aciklama" maxlength="140" autocomplete="off">
+          </label>
+          <p class="form-hata" role="alert" hidden></p>
+          <button type="submit" class="btn btn-ana btn-genis">Ödemeyi onayla</button>
+          <p class="ipucu soluk">Her ödeme benzersiz bir Idempotency-Key ile gönderilir; bağlantı koparsa tekrar denemek çift ödeme oluşturmaz.</p>
+        </form>
+
+        <div class="panel panel-tablo">
+          <div class="panel-baslik">
+            <h2>Son işlemler</h2>
+            <button type="button" id="odemeYenileBtn" class="btn btn-hayalet btn-kucuk">Yenile</button>
+          </div>
+          <div class="tablo-sar">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Tarih</th>
+                  <th scope="col">Kart</th>
+                  <th scope="col" class="gizle-mobil">Açıklama</th>
+                  <th scope="col" class="sag">Tutar</th>
+                  <th scope="col">Durum</th>
+                  <th scope="col"><span class="gorunmez">İşlem</span></th>
+                </tr>
+              </thead>
+              <tbody id="odemeTablosu"></tbody>
+            </table>
+          </div>
+          <button type="button" id="dahaFazlaBtn" class="btn btn-hayalet btn-genis" hidden>Daha fazla yükle</button>
+        </div>
+      </section>
+
+      <!-- Kartlar -->
+      <section id="bolum-kartlar" class="bolum" hidden>
+        <div class="panel-baslik">
+          <h2>Kartlarım</h2>
+        </div>
+        <div id="kartListesi" class="kartlar"></div>
+      </section>
+
+      <!-- Yönetim -->
+      <section id="bolum-yonetim" class="bolum izgara" hidden>
+        <form id="kullaniciFormu" class="panel" novalidate>
+          <h2>Kullanıcı ekle</h2>
+          <label class="alan">
+            <span>E-posta</span>
+            <input type="email" name="eposta" autocomplete="off" required>
+          </label>
+          <label class="alan">
+            <span>Şifre <em class="soluk">(8-72 karakter)</em></span>
+            <input type="password" name="sifre" autocomplete="new-password" minlength="8" maxlength="72" required>
+          </label>
+          <label class="alan">
+            <span>Rol</span>
+            <select name="rol">
+              <option value="kullanici">Kullanıcı</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <p class="form-hata" role="alert" hidden></p>
+          <button type="submit" class="btn btn-ana btn-genis">Kullanıcı oluştur</button>
+        </form>
+
+        <form id="kartFormu" class="panel" novalidate>
+          <h2>Kart tanımla</h2>
+          <label class="alan">
+            <span>Kart numarası</span>
+            <input type="text" name="kart_no" inputmode="numeric" placeholder="1111-2222" autocomplete="off" required>
+          </label>
+          <label class="alan">
+            <span>Başlangıç bakiyesi</span>
+            <div class="tutar-girdi">
+              <input type="text" name="bakiye" inputmode="decimal" placeholder="0,00" autocomplete="off">
+              <span aria-hidden="true">₺</span>
+            </div>
+          </label>
+          <label class="alan">
+            <span>Kart sahibi</span>
+            <select name="sahip_eposta"></select>
+          </label>
+          <p class="form-hata" role="alert" hidden></p>
+          <button type="submit" class="btn btn-ana btn-genis">Kartı ekle</button>
+          <details class="toplu">
+            <summary>JSON ile toplu yükle</summary>
+            <textarea name="toplu" rows="5" spellcheck="false">[{"kart_no":"5555-6666","bakiye":1500,"sahip_eposta":""}]</textarea>
+            <button type="button" id="topluBtn" class="btn btn-hayalet btn-genis">Toplu yükle</button>
+          </details>
+        </form>
+
+        <div class="panel panel-tablo">
+          <div class="panel-baslik">
+            <h2>Kullanıcılar</h2>
+          </div>
+          <div class="tablo-sar">
+            <table>
+              <thead>
+                <tr><th scope="col">E-posta</th><th scope="col">Rol</th><th scope="col">Kayıt</th></tr>
+              </thead>
+              <tbody id="kullaniciTablosu"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- İade penceresi -->
+  <dialog id="iadePenceresi">
+    <form id="iadeFormu" method="dialog" novalidate>
+      <h2>Ödemeyi iade et</h2>
+      <p id="iadeBilgi" class="soluk"></p>
+      <label class="alan">
+        <span>İade tutarı</span>
+        <div class="tutar-girdi">
+          <input type="text" name="tutar" inputmode="decimal" autocomplete="off" required>
+          <span aria-hidden="true">₺</span>
+        </div>
+      </label>
+      <p class="form-hata" role="alert" hidden></p>
+      <div class="dugmeler">
+        <button type="button" class="btn btn-hayalet" data-kapat>Vazgeç</button>
+        <button type="submit" class="btn btn-tehlike">İade et</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="bildirimler" class="bildirimler" aria-live="polite"></div>
+</body>
+</html>

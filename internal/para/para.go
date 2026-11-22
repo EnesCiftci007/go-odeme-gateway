@@ -1,7 +1,8 @@
-package payment
+package para
 
 import (
 	"bytes"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strconv"
@@ -75,5 +76,24 @@ func (k *Kurus) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*k = v
+	return nil
+}
+
+// Value ve Scan, tipin her veritabanı sürücüsünde (SQLite, PostgreSQL) BIGINT olarak saklanmasını sağlar.
+func (k Kurus) Value() (driver.Value, error) {
+	return int64(k), nil
+}
+
+func (k *Kurus) Scan(src any) error {
+	switch v := src.(type) {
+	case int64:
+		*k = Kurus(v)
+	case int32:
+		*k = Kurus(v)
+	case nil:
+		*k = 0
+	default:
+		return fmt.Errorf("Kurus: desteklenmeyen tip %T", src)
+	}
 	return nil
 }

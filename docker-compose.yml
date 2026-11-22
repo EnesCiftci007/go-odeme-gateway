@@ -1,0 +1,37 @@
+# PostgreSQL ile çalıştırma:
+#   1) .env.example dosyasını .env olarak kopyalayın ve değerleri doldurun
+#   2) docker compose up --build
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: odeme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env dosyasında ayarlanmalı}
+      POSTGRES_DB: odeme
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odeme -d odeme"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgres://odeme:${POSTGRES_PASSWORD}@db:5432/odeme?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET .env dosyasında ayarlanmalı}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+    restart: unless-stopped
+
+volumes:
+  pgdata:
